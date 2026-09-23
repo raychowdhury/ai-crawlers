@@ -1,18 +1,19 @@
 # AI Crawler Checker
 
-A dependency-free Node.js web app that checks whether a public website appears accessible to major search and AI crawler signals.
+A Node.js web app that checks whether a public website appears accessible to major search and AI crawler signals.
 
 ## Run
 
 Requires Node.js 20+.
 
 ```bash
+npm install
 npm start
 ```
 
 Open http://localhost:3000. If that port is occupied, run `PORT=3107 npm start` and open http://localhost:3107.
 
-There is no compilation step or dependency installation: Node serves the app directly.
+There is no compilation step. Run `npm install` once to install the HTML parser used for safe, targeted file edits; Node serves the app directly.
 
 Enter a public website URL (a bare domain is accepted). The report includes per-crawler rules, HTTP results, priority findings, and a JSON download. While an audit runs, the submit button is disabled to prevent duplicate requests.
 
@@ -40,3 +41,52 @@ This is an external diagnostic. A successful test does not guarantee that a prov
 - Audit request bodies are limited to 10 KB and 10 seconds.
 
 Run the security regression tests with `npm test`. The app does not execute fetched scripts or call an AI model. Exported reports can contain untrusted website text and must remain untrusted if used in a downstream AI workflow.
+
+## Business fix workspace (early access, separate branch)
+
+Open `/workspace` on a development server. The old prototype route remains a visual experiment. `/workspace` has real server-side GitHub integration code and never labels simulated changes as real changes.
+
+### Current integration support
+
+| Platform | Current capability |
+|---|---|
+| GitHub | Connect one repository, inspect supported source files, review exact before/after content, approve and create a draft pull request, read back the proposed file, refresh PR status |
+| WordPress | Platform-specific developer plan download; no plugin connection or site writes yet |
+| Shopify | Platform-specific developer plan download; no OAuth connection or store writes yet |
+| Other | Developer plan download |
+
+Supported GitHub changes are deliberately narrow:
+- Add one verified, same-origin XML sitemap URL to `robots.txt`, `public/robots.txt`, or `static/robots.txt`. Existing crawler permissions are preserved. This does not generate a sitemap.
+- Remove literal `noindex` tokens from generic robots meta tags in the head of static `.html` files. Other directives, script contents and comments are preserved using parse5. Templates and response-header noindex require developer review.
+
+The owner must confirm the repository/file-to-website mapping. The app does not infer or independently prove this mapping. Live crawl results are signals and must be reviewed alongside the exact source diff. No LLM is used to generate or execute changes.
+
+### GitHub setup
+
+1. Create a short-lived **fine-grained** GitHub personal access token for **only the selected repository**. Grant Contents: read/write and Pull requests: read/write (GitHub includes metadata read access). Organization policies may require administrator approval.
+2. Enter `owner/repository` and the token in the workspace's password field. Do not put the token in the URL, source code, environment files, or chat.
+3. Run a website audit, choose a supported fix and exact source path, and confirm the mapping.
+4. Review the before/after contents. Explicit approval creates a new `crawler-fixes/<id>` branch and draft PR. There is no automatic merge or deployment.
+5. Review repository CI and the PR on GitHub. Closing an unmerged PR discards the proposal; after merging, use a revert PR to roll it back. After your host deploys, rerun the live audit. The app verifies branch contents, not your deployment.
+
+### Runtime configuration
+
+Development defaults to `http://localhost:<PORT>`. If using another host, set `APP_ORIGIN` to the exact browser origin (no trailing slash).
+
+Public deployment is disabled by default. To opt in on an HTTPS host, set:
+
+```text
+ENABLE_FIX_WORKSPACE=true
+APP_ORIGIN=https://your-exact-host.example
+NODE_ENV=production
+```
+
+There are no app-wide GitHub credentials. Each connection uses its owner's supplied scoped token. Cookies are HttpOnly, SameSite=Strict, and Secure on HTTPS. Mutations require exact Origin and a session-specific CSRF token. The workspace has no third-party scripts, analytics or browser credential storage.
+
+Sessions, connection tokens, plans, and recent activity live in one process's memory and expire after 30 minutes. Plans expire after 15 minutes. Disconnect forgets the token; revoking it on GitHub invalidates it everywhere. Server restarts lose sessions. A submitted branch/PR persists in GitHub. If an API write fails ambiguously, the plan is locked against blind resubmission and can be checked against GitHub. Inspect any partial branch before starting again.
+
+This release is intended for a single-instance early-access pilot. Persistent accounts, an encrypted shared session store, GitHub App installation authorization, WordPress plugin integration and Shopify OAuth remain future work. Do not scale to multiple instances without shared sessions and distributed limits.
+
+### Verification
+
+`npm test` includes fake-provider integration tests for approval, tenant isolation, CSRF, plan expiry, stale base branches, safe HTML edits, duplicate submission and ambiguous failures. These tests do not create real GitHub resources. A real repository authorization and write must be validated in an owner-approved sandbox repository before public rollout.

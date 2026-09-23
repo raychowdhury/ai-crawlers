@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { publicUrl, safeFetch } from './lib/safe-fetch.mjs';
 import { createAuditGate } from './lib/audit-gate.mjs';
+import { createWorkspace } from './lib/workspace.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = new URL('./public/', import.meta.url).pathname;
@@ -166,6 +167,7 @@ async function serveStatic(req,res){
   let p=requestUrl.pathname;
   if(p==='/' && requestUrl.searchParams.get('prototype')==='fix-plan' && process.env.NODE_ENV!=='production') p='/fix-plan-prototype.html';
   else if(p==='/')p='/index.html';
+  if(p==='/workspace')p='/workspace.html';
   if(process.env.NODE_ENV==='production' && p.includes('fix-plan-prototype')) return json(res,404,{error:'Not found'});
   const file=join(PUBLIC,p.replace(/^\/+/,''));
   if(!file.startsWith(PUBLIC)) return json(res,403,{error:'Forbidden'});
@@ -176,7 +178,20 @@ async function serveStatic(req,res){
   }catch{json(res,404,{error:'Not found'});}
 }
 
+const workspaceEnabled=process.env.NODE_ENV!=='production'||process.env.ENABLE_FIX_WORKSPACE==='true';
+const workspace=createWorkspace({origin:process.env.APP_ORIGIN||(process.env.NODE_ENV!=='production'?`http://localhost:${PORT}`:null),audit,acquireAudit:()=>acquireAudit('workspace')});
 const server=http.createServer(async(req,res)=>{
+  if(req.url.startsWith('/api/workspace')){
+    if(!workspaceEnabled)return json(res,404,{error:'Not found'});
+    await workspace(req,res);return;
+  }
+  if(req.url.startsWith('/workspace') && !workspaceEnabled)return json(res,404,{error:'Not found'});
+  if(req.url.startsWith('/workspace')){
+    res.setHeader('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('referrer-policy','no-referrer');
+    res.setHeader('cache-control','no-store');
+    res.setHeader('x-content-type-options','nosniff');
+  }
   if(req.method==='POST' && req.url==='/api/check'){
     const release = acquireAudit(req.socket.remoteAddress || 'unknown');
     if (!release) { res.setHeader('retry-after','60'); return json(res,429,{error:'Too many audits. Please try again in a minute.'}); }
