@@ -1,13 +1,13 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { lookup } from 'node:dns/promises';
-import net from 'node:net';
+import { publicUrl, safeFetch } from './lib/safe-fetch.mjs';
+import { createAuditGate } from './lib/audit-gate.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = new URL('./public/', import.meta.url).pathname;
 const MAX_BYTES = 1_500_000;
-const MAX_REDIRECTS = 5;
+const acquireAudit = createAuditGate();
 
 const BOTS = [
   { id: 'oai-searchbot', name: 'OAI-SearchBot', company: 'OpenAI', token: 'OAI-SearchBot', ua: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot', kind: 'search' },
@@ -25,46 +25,6 @@ function json(res, code, body) {
   const payload = JSON.stringify(body);
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload) });
   res.end(payload);
-}
-
-function isPrivateIp(ip) {
-  if (net.isIPv4(ip)) {
-    const [a,b] = ip.split('.').map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
-  }
-  if (net.isIPv6(ip)) {
-    const s = ip.toLowerCase();
-    return s === '::1' || s === '::' || s.startsWith('fc') || s.startsWith('fd') || s.startsWith('fe8') || s.startsWith('fe9') || s.startsWith('fea') || s.startsWith('feb');
-  }
-  return true;
-}
-
-async function assertPublicUrl(input) {
-  let url;
-  try { url = new URL(input); } catch { throw new Error('Enter a valid URL, for example https://example.com'); }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only http:// and https:// URLs are supported.');
-  if (url.username || url.password) throw new Error('URLs with credentials are not allowed.');
-  if (['localhost', 'localhost.localdomain'].includes(url.hostname.toLowerCase())) throw new Error('Localhost/private network targets are not allowed.');
-  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some(a => isPrivateIp(a.address))) throw new Error('Private or non-public network targets are not allowed.');
-  return url;
-}
-
-async function safeFetch(input, options = {}, redirects = 0) {
-  if (redirects > MAX_REDIRECTS) throw new Error('Too many redirects.');
-  const url = await assertPublicUrl(input);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 9000);
-  try {
-    const response = await fetch(url, { ...options, redirect: 'manual', signal: controller.signal, headers: { 'accept': 'text/html,text/plain,application/xhtml+xml,*/*;q=0.8', ...(options.headers || {}) } });
-    if ([301,302,303,307,308].includes(response.status)) {
-      const loc = response.headers.get('location');
-      if (!loc) return { response, finalUrl: url.href, redirects };
-      const next = new URL(loc, url);
-      return safeFetch(next.href, options, redirects + 1);
-    }
-    return { response, finalUrl: url.href, redirects };
-  } finally { clearTimeout(timer); }
 }
 
 async function readLimited(response) {
@@ -150,7 +110,7 @@ async function checkBot(rootUrl, path, bot, robotsParsed) {
 }
 
 async function audit(input) {
-  const start = await assertPublicUrl(input);
+  const start = publicUrl(input);
   const targetPath = start.pathname || '/';
   const origin = start.origin;
   let robotsStatus=null, robotsText='', robotsError=null;
@@ -214,8 +174,24 @@ async function serveStatic(req,res){
 
 const server=http.createServer(async(req,res)=>{
   if(req.method==='POST' && req.url==='/api/check'){
-    let raw=''; req.on('data',c=>{raw+=c;if(raw.length>10000)req.destroy();});
-    req.on('end',async()=>{try{const {url}=JSON.parse(raw||'{}'); if(!url)return json(res,400,{error:'URL is required'}); json(res,200,await audit(url));}catch(e){json(res,400,{error:e.message||'Audit failed'});}}); return;
+    const release = acquireAudit(req.socket.remoteAddress || 'unknown');
+    if (!release) { res.setHeader('retry-after','60'); return json(res,429,{error:'Too many audits. Please try again in a minute.'}); }
+    let raw='', bytes=0, rejected=false;
+    const bodyTimer=setTimeout(()=>{ rejected=true; release(); json(res,408,{error:'Request timed out'}); req.destroy(); },10000);
+    req.on('error',()=>{clearTimeout(bodyTimer);release();});
+    req.on('aborted',()=>{clearTimeout(bodyTimer);release();});
+    req.on('data',c=>{
+      bytes+=c.length;
+      if(bytes>10000 && !rejected){rejected=true;clearTimeout(bodyTimer);release();json(res,413,{error:'Request body too large'});req.destroy();}
+      if(!rejected) raw+=c;
+    });
+    req.on('end',async()=>{
+      clearTimeout(bodyTimer);
+      if(rejected)return;
+      try { const {url}=JSON.parse(raw||'{}'); if(typeof url!=='string'||!url) return json(res,400,{error:'URL is required'}); json(res,200,await audit(url)); }
+      catch(e){json(res,400,{error:e.message||'Audit failed'});}
+      finally{release();}
+    }); return;
   }
   serveStatic(req,res);
 });

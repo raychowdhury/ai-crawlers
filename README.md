@@ -28,3 +28,15 @@ Enter a public website URL (a bare domain is accepted). The report includes per-
 
 ## Important limitation
 This is an external diagnostic. A successful test does not guarantee that a provider will index, rank, train on, or cite a site. Some providers use additional IP verification, browser execution, proprietary crawl systems, or search indexes.
+
+## Network and abuse protection
+
+- Outbound connections use a validated, pinned public IP while preserving the hostname for HTTPS certificate verification.
+- Every redirect is validated. Private, loopback, mapped IPv4, reserved, and selected IPv6 transition ranges are rejected.
+- Only standard HTTP/HTTPS ports are supported.
+- Each fetch has a 9-second deadline covering DNS, redirects, and the complete response body, with a 1.5 MB response limit and at most five redirects.
+- Each server process allows at most 3 active audits, 30 admitted audits per minute globally, and 10 per minute per socket client address. Rejections return HTTP 429 with Retry-After.
+- Forwarded client-IP headers are intentionally not trusted. Behind a reverse proxy, visitors may share the per-client allowance. Multiple instances require a shared limiter or an edge-level limit for fleet-wide protection.
+- Audit request bodies are limited to 10 KB and 10 seconds.
+
+Run the security regression tests with `npm test`. The app does not execute fetched scripts or call an AI model. Exported reports can contain untrusted website text and must remain untrusted if used in a downstream AI workflow.
