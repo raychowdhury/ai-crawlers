@@ -162,7 +162,11 @@ async function audit(input) {
 }
 
 async function serveStatic(req,res){
-  let p=new URL(req.url,'http://x').pathname; if(p==='/')p='/index.html';
+  const requestUrl=new URL(req.url,'http://x');
+  let p=requestUrl.pathname;
+  if(p==='/' && requestUrl.searchParams.get('prototype')==='fix-plan' && process.env.NODE_ENV!=='production') p='/fix-plan-prototype.html';
+  else if(p==='/')p='/index.html';
+  if(process.env.NODE_ENV==='production' && p.includes('fix-plan-prototype')) return json(res,404,{error:'Not found'});
   const file=join(PUBLIC,p.replace(/^\/+/,''));
   if(!file.startsWith(PUBLIC)) return json(res,403,{error:'Forbidden'});
   try{
