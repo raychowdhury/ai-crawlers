@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { publicUrl, safeFetch } from './lib/safe-fetch.mjs';
 import { createAuditGate } from './lib/audit-gate.mjs';
+import { createWorkspace } from './lib/workspace.mjs';
 import { parseRobots, robotsDecision } from './lib/robots.mjs';
 import { extractMeta } from './lib/metadata.mjs';
 import { securityHeaders } from './lib/security-headers.mjs';
@@ -113,7 +114,11 @@ async function audit(input) {
 }
 
 async function serveStatic(req,res,requestUrl){
-  let p=requestUrl.pathname; if(p==='/')p='/index.html';
+  let p=requestUrl.pathname;
+  if(p==='/' && requestUrl.searchParams.get('prototype')==='fix-plan' && process.env.NODE_ENV!=='production') p='/fix-plan-prototype.html';
+  else if(p==='/')p='/index.html';
+  if(p==='/workspace')p='/workspace.html';
+  if(process.env.NODE_ENV==='production' && p.includes('fix-plan-prototype')) return json(res,404,{error:'Not found'});
   const file=join(PUBLIC,p.replace(/^\/+/,''));
   if(!file.startsWith(PUBLIC)) return json(res,403,{error:'Forbidden'});
   try{
@@ -123,6 +128,8 @@ async function serveStatic(req,res,requestUrl){
   }catch{json(res,404,{error:'Not found'});}
 }
 
+const workspaceEnabled=process.env.NODE_ENV!=='production'||process.env.ENABLE_FIX_WORKSPACE==='true';
+const workspace=createWorkspace({origin:process.env.APP_ORIGIN||(process.env.NODE_ENV!=='production'?`http://localhost:${PORT}`:null),audit,acquireAudit:()=>acquireAudit('workspace')});
 async function handleRequest(req,res){
   let requestUrl;
   try{
@@ -130,7 +137,19 @@ async function handleRequest(req,res){
     requestUrl=new URL(req.url,'http://local');
     if(requestUrl.origin!=='http://local')throw new Error('Invalid target');
   }catch{return json(res,400,{error:'Invalid request target'});}
+  // Use the same normalized path for routing, authorization and static files.
   req.url=requestUrl.pathname+requestUrl.search;
+  const pathname=requestUrl.pathname;
+  if(pathname.startsWith('/api/workspace')){
+    if(!workspaceEnabled)return json(res,404,{error:'Not found'});
+    await workspace(req,res);return;
+  }
+  if(pathname.startsWith('/workspace') && !workspaceEnabled)return json(res,404,{error:'Not found'});
+  if(pathname.startsWith('/workspace')){
+    res.setHeader('referrer-policy','no-referrer');
+    res.setHeader('cache-control','no-store');
+    res.setHeader('x-content-type-options','nosniff');
+  }
   if(req.method==='POST' && req.url==='/api/check'){
     const release = acquireAudit(req.socket.remoteAddress || 'unknown');
     if (!release) { res.setHeader('retry-after','60'); return json(res,429,{error:'Too many audits. Please try again in a minute.'}); }
