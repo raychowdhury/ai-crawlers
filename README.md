@@ -90,3 +90,7 @@ This release is intended for a single-instance early-access pilot. Persistent ac
 ### Verification
 
 `npm test` includes fake-provider integration tests for approval, tenant isolation, CSRF, plan expiry, stale base branches, safe HTML edits, duplicate submission and ambiguous failures. These tests do not create real GitHub resources. A real repository authorization and write must be validated in an owner-approved sandbox repository before public rollout.
+
+## Bounded request and robots processing
+
+Malformed request targets return 400, and asynchronous route failures are caught at the HTTP boundary. Routing and access checks use the same normalized pathname. Robots wildcards use bounded dynamic programming instead of backtracking regular expressions. Parsing is capped at 500,000 characters, 5,000 lines, 1,000 rules and 1,024 characters per rule; each crawler decision has a 500,000-comparison budget and a 4,096-character path limit. Exceeded limits and unavailable robots policies produce an Unknown result and a review finding, not an allow decision.
