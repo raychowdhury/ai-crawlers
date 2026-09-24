@@ -1,18 +1,19 @@
 # AI Crawler Checker
 
-A dependency-free Node.js web app that checks whether a public website appears accessible to major search and AI crawler signals.
+A small Node.js web app that checks whether a public website appears accessible to major search and AI crawler signals.
 
 ## Run
 
 Requires Node.js 20+.
 
 ```bash
+npm install
 npm start
 ```
 
 Open http://localhost:3000. If that port is occupied, run `PORT=3107 npm start` and open http://localhost:3107.
 
-There is no compilation step or dependency installation: Node serves the app directly.
+There is no compilation step. Install dependencies with npm install; Node serves the app directly.
 
 Enter a public website URL (a bare domain is accepted). The report includes per-crawler rules, HTTP results, priority findings, and a JSON download. While an audit runs, the submit button is disabled to prevent duplicate requests.
 
@@ -44,3 +45,5 @@ Run the security regression tests with `npm test`. The app does not execute fetc
 ## Bounded request and robots processing
 
 Malformed request targets return 400, and asynchronous route failures are caught at the HTTP boundary. Routing and access checks use the same normalized pathname. Robots wildcards use bounded dynamic programming instead of backtracking regular expressions. Parsing is capped at 500,000 characters, 5,000 lines, 1,000 rules and 1,024 characters per rule; each crawler decision has a 500,000-comparison budget and a 4,096-character path limit. Exceeded limits and unavailable robots policies produce an Unknown result and a review finding, not an allow decision.
+
+HTML metadata is parsed with parse5 in an isolated worker with a one-second deadline and a memory budget. Incomplete metadata produces an Unknown result. Run npm install before starting. All app responses include a restrictive Content Security Policy, frame blocking, MIME sniffing protection, a no-referrer policy, and HSTS on HTTPS.

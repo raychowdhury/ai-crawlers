@@ -26,3 +26,17 @@ test('normalized paths cannot bypass the production workspace gate',async t=>{
  const {address}=await start(t,{NODE_ENV:'production',ENABLE_FIX_WORKSPACE:'false'});
  assert.match(await raw(address,'/other/../workspace'),/^HTTP\/1.1 404/);
 });
+
+test('browser security headers cover pages, API errors and malformed targets',async t=>{
+ const {address}=await start(t);
+ for(const path of ['/','/missing','/api/check']){
+  const response=await fetch(`http://localhost:${address}${path}`);
+  assert.match(response.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  assert.match(response.headers.get('content-security-policy'),/script-src 'self'/);
+  assert.equal(response.headers.get('x-content-type-options'),'nosniff');
+  assert.equal(response.headers.get('x-frame-options'),'DENY');
+  assert.equal(response.headers.get('referrer-policy'),'no-referrer');
+  assert.equal(response.headers.get('strict-transport-security'),'max-age=31536000');
+ }
+ assert.match(await raw(address,'//['),/content-security-policy:/i);
+});
