@@ -40,3 +40,7 @@ This is an external diagnostic. A successful test does not guarantee that a prov
 - Audit request bodies are limited to 10 KB and 10 seconds.
 
 Run the security regression tests with `npm test`. The app does not execute fetched scripts or call an AI model. Exported reports can contain untrusted website text and must remain untrusted if used in a downstream AI workflow.
+
+## Bounded request and robots processing
+
+Malformed request targets return 400, and asynchronous route failures are caught at the HTTP boundary. Routing and access checks use the same normalized pathname. Robots wildcards use bounded dynamic programming instead of backtracking regular expressions. Parsing is capped at 500,000 characters, 5,000 lines, 1,000 rules and 1,024 characters per rule; each crawler decision has a 500,000-comparison budget and a 4,096-character path limit. Exceeded limits and unavailable robots policies produce an Unknown result and a review finding, not an allow decision.

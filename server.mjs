@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { publicUrl, safeFetch } from './lib/safe-fetch.mjs';
 import { createAuditGate } from './lib/audit-gate.mjs';
+import { parseRobots, robotsDecision } from './lib/robots.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = new URL('./public/', import.meta.url).pathname;
@@ -41,50 +42,6 @@ async function readLimited(response) {
   return new TextDecoder().decode(Buffer.concat(chunks.map(v => Buffer.from(v))));
 }
 
-function parseRobots(text) {
-  const groups = [];
-  let agents = [], rules = [], sitemaps = [], groupStarted = false;
-  const flush = () => { if (agents.length) groups.push({ agents: [...agents], rules: [...rules] }); agents=[]; rules=[]; groupStarted=false; };
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/#.*$/, '').trim();
-    if (!line) continue;
-    const i = line.indexOf(':'); if (i < 0) continue;
-    const key = line.slice(0,i).trim().toLowerCase(); const value = line.slice(i+1).trim();
-    if (key === 'user-agent') {
-      if (groupStarted && rules.length) flush();
-      agents.push(value.toLowerCase()); groupStarted = true;
-    } else if ((key === 'allow' || key === 'disallow') && agents.length) {
-      rules.push({ type: key, path: value });
-    } else if (key === 'sitemap') sitemaps.push(value);
-  }
-  flush();
-  return { groups, sitemaps };
-}
-
-function ruleToRegex(path) {
-  if (!path) return null;
-  const end = path.endsWith('$');
-  let p = end ? path.slice(0,-1) : path;
-  const esc = p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-  return new RegExp('^' + esc + (end ? '$' : ''));
-}
-
-function robotsDecision(parsed, token, pathname='/') {
-  const t = token.toLowerCase();
-  let matches = parsed.groups.filter(g => g.agents.includes(t));
-  if (!matches.length) matches = parsed.groups.filter(g => g.agents.includes('*'));
-  if (!matches.length) return { allowed: true, reason: 'No matching robots.txt rule' };
-  const candidates=[];
-  for (const g of matches) for (const r of g.rules) {
-    if (r.type === 'disallow' && r.path === '') continue;
-    const rx = ruleToRegex(r.path); if (rx && rx.test(pathname)) candidates.push(r);
-  }
-  if (!candidates.length) return { allowed: true, reason: 'No rule matches this path' };
-  candidates.sort((a,b) => b.path.replace(/\*|\$/g,'').length - a.path.replace(/\*|\$/g,'').length || (a.type === 'allow' ? -1 : 1));
-  const winner = candidates[0];
-  return { allowed: winner.type === 'allow', reason: `${winner.type === 'allow' ? 'Allowed' : 'Blocked'} by ${winner.type}: ${winner.path}` };
-}
-
 function extractMeta(html) {
   const metaRobots=[];
   for (const m of html.matchAll(/<meta\s+[^>]*>/gi)) {
@@ -111,7 +68,7 @@ async function checkBot(rootUrl, path, bot, robotsParsed) {
 
 async function audit(input) {
   const start = publicUrl(input);
-  const targetPath = start.pathname || '/';
+  const targetPath = start.pathname + start.search;
   const origin = start.origin;
   let robotsStatus=null, robotsText='', robotsError=null;
   try {
@@ -119,6 +76,7 @@ async function audit(input) {
     robotsStatus=response.status; robotsText=await readLimited(response);
   } catch(e) { robotsError=e.message; }
   const parsed = parseRobots(robotsText);
+  if(robotsError || robotsStatus>=500 || robotsStatus===429)parsed.error='robots.txt could not be evaluated reliably';
 
   let pageStatus=null, pageHtml='', pageHeaders={}, pageFinalUrl=start.href, pageError=null, redirects=0;
   try {
@@ -144,15 +102,17 @@ async function audit(input) {
   let score=100;
   if (!(pageStatus>=200&&pageStatus<400)) score-=25;
   if (metaNoindex || headerNoindex) score-=30;
-  score -= coreBots.filter(b => !b.robotsAllowed).length * 8;
+  score -= coreBots.filter(b => b.robotsAllowed === false).length * 8;
   score -= coreBots.filter(b => b.httpAccessible === false).length * 5;
   if (!sitemapResults.some(s=>s.ok)) score-=6;
   if (!meta.jsonLd) score-=6;
   score=Math.max(0, Math.min(100, score));
+  if(coreBots.some(b=>b.robotsAllowed===null))score=Math.min(score,79);
 
   const findings=[];
+  if(coreBots.some(b=>b.robotsAllowed===null))findings.push({severity:'medium',title:'Crawler policy could not be determined',detail:parsed.error||'The robots rules exceeded the safe matching budget. Review robots.txt manually.'});
   if (metaNoindex || headerNoindex) findings.push({severity:'critical',title:'Page is marked noindex',detail:'Search engines may be instructed not to index this page.'});
-  for (const b of coreBots.filter(b=>!b.robotsAllowed)) findings.push({severity:'high',title:`${b.name} is blocked by robots.txt`,detail:b.robotsReason});
+  for (const b of coreBots.filter(b=>b.robotsAllowed === false)) findings.push({severity:'high',title:`${b.name} is blocked by robots.txt`,detail:b.robotsReason});
   for (const b of coreBots.filter(b=>b.robotsAllowed && b.httpAccessible===false)) findings.push({severity:'high',title:`${b.name} could not fetch the page`,detail:b.error || `HTTP ${b.httpStatus}`});
   if (!sitemapResults.some(s=>s.ok)) findings.push({severity:'medium',title:'No working sitemap found',detail:'Add a sitemap.xml and reference it in robots.txt.'});
   if (!meta.jsonLd) findings.push({severity:'medium',title:'No JSON-LD structured data detected',detail:'Add Organization or LocalBusiness schema where appropriate.'});
@@ -161,8 +121,8 @@ async function audit(input) {
   return { auditedAt:new Date().toISOString(), input:start.href, origin, page:{status:pageStatus,finalUrl:pageFinalUrl,redirects,error:pageError,title:meta.title,contentType:pageHeaders['content-type'],xRobotsTag:pageHeaders['x-robots-tag'],metaRobots:meta.metaRobots,jsonLdBlocks:meta.jsonLd,noindex:metaNoindex||headerNoindex}, robots:{status:robotsStatus,error:robotsError,found:Boolean(robotsText),sitemaps:parsed.sitemaps}, sitemaps:sitemapResults, bots:botResults, score, findings, disclaimer:'This is an external diagnostic. User-Agent simulation can detect many blocks, but it cannot prove how a provider will index, rank, train on, or cite a site.' };
 }
 
-async function serveStatic(req,res){
-  let p=new URL(req.url,'http://x').pathname; if(p==='/')p='/index.html';
+async function serveStatic(req,res,requestUrl){
+  let p=requestUrl.pathname; if(p==='/')p='/index.html';
   const file=join(PUBLIC,p.replace(/^\/+/,''));
   if(!file.startsWith(PUBLIC)) return json(res,403,{error:'Forbidden'});
   try{
@@ -172,7 +132,14 @@ async function serveStatic(req,res){
   }catch{json(res,404,{error:'Not found'});}
 }
 
-const server=http.createServer(async(req,res)=>{
+async function handleRequest(req,res){
+  let requestUrl;
+  try{
+    if(!req.url.startsWith('/')||req.url.startsWith('//')||req.url.includes('\\'))throw new Error('Invalid target');
+    requestUrl=new URL(req.url,'http://local');
+    if(requestUrl.origin!=='http://local')throw new Error('Invalid target');
+  }catch{return json(res,400,{error:'Invalid request target'});}
+  req.url=requestUrl.pathname+requestUrl.search;
   if(req.method==='POST' && req.url==='/api/check'){
     const release = acquireAudit(req.socket.remoteAddress || 'unknown');
     if (!release) { res.setHeader('retry-after','60'); return json(res,429,{error:'Too many audits. Please try again in a minute.'}); }
@@ -193,6 +160,13 @@ const server=http.createServer(async(req,res)=>{
       finally{release();}
     }); return;
   }
-  serveStatic(req,res);
+  await serveStatic(req,res,requestUrl);
+}
+const server=http.createServer((req,res)=>{
+  handleRequest(req,res).catch(()=>{
+    if(res.destroyed||res.writableEnded)return;
+    if(res.headersSent){res.destroy();return;}
+    json(res,500,{error:'Request could not be completed'});
+  });
 });
-server.listen(PORT,()=>console.log(`AI Crawler Checker running at http://localhost:${PORT}`));
+server.listen(PORT,()=>console.log(`AI Crawler Checker running at http://localhost:${server.address().port}`));

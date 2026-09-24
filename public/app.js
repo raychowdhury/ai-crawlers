@@ -1,6 +1,6 @@
 const $=s=>document.querySelector(s); const form=$('#form'), results=$('#results'), loading=$('#loading');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const status=(ok,na=false)=>na?'<span class="status warn">N/A</span>':ok?'<span class="status ok">● Allowed</span>':'<span class="status bad">● Blocked</span>';
+const status=(ok,na=false)=>ok===null?'<span class="status warn">● Unknown</span>':na?'<span class="status warn">N/A</span>':ok?'<span class="status ok">● Allowed</span>':'<span class="status bad">● Blocked</span>';
 let currentReport = null;
 form.addEventListener('submit', async e => {
  e.preventDefault();
