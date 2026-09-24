@@ -40,3 +40,23 @@ test('browser security headers cover pages, API errors and malformed targets',as
  }
  assert.match(await raw(address,'//['),/content-security-policy:/i);
 });
+
+test('production defaults hide workspace and all prototype entry points',async t=>{
+ const {address}=await start(t,{NODE_ENV:'production',ENABLE_FIX_WORKSPACE:'false'});
+ for(const path of ['/workspace','/workspace.html','/workspace.js','/api/workspace','/fix-plan-prototype.html','/fix-plan-prototype.js']){
+  assert.equal((await fetch(`http://localhost:${address}${path}`)).status,404,path);
+ }
+ const homepage=await fetch(`http://localhost:${address}/?prototype=fix-plan`);
+ assert.equal(homepage.status,200);assert.ok(!(await homepage.text()).includes('fix-plan-prototype.js'));
+});
+test('production workspace requires exact HTTPS origin and secure session cookies',async t=>{
+ const disabled=await start(t,{NODE_ENV:'production',ENABLE_FIX_WORKSPACE:'true',APP_ORIGIN:''});
+ assert.equal((await fetch(`http://localhost:${disabled.address}/api/workspace`)).status,503);
+ const enabled=await start(t,{NODE_ENV:'production',ENABLE_FIX_WORKSPACE:'true',APP_ORIGIN:'https://example.com'});
+ const response=await fetch(`http://localhost:${enabled.address}/api/workspace`);
+ assert.equal(response.status,200);
+ for(const value of ['HttpOnly','Secure','SameSite=Strict','Path=/api/workspace'])assert.ok(response.headers.get('set-cookie').includes(value));
+ assert.equal(response.headers.get('cache-control'),'no-store');
+ const denied=await fetch(`http://localhost:${enabled.address}/api/workspace`,{headers:{'sec-fetch-site':'cross-site'}});
+ assert.equal(denied.status,403);
+});

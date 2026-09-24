@@ -178,3 +178,19 @@ test('unconnected sessions expire after two idle minutes while connected owners 
  assert.equal((await f.post('/disconnect',{}, {sessionCookie:cookie,csrf:state.csrf})).status,401);
  assert.equal((await f.post('/disconnect',{})).status,200);
 });
+
+test('PDF export requires own session, audit and CSRF; returns a private PDF without writes',async t=>{
+ const f=await workspaceFixture(t);
+ assert.equal((await f.post('/export',{platform:'developer'})).status,400);
+ await f.post('/audit',{url:'https://example.com/'});
+ assert.equal((await f.post('/export',{platform:'developer'},{csrf:'wrong'})).status,403);
+ assert.equal((await f.post('/export',{platform:'developer'},{sessionCookie:''})).status,401);
+ assert.equal((await f.post('/export',{platform:'bad'})).status,400);
+ const r=await fetch(f.origin+'/api/workspace/export',{method:'POST',headers:{'content-type':'application/json',origin:f.origin,cookie:f.cookie,'x-csrf-token':f.state.csrf},body:JSON.stringify({platform:'wordpress'})});
+ assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'application/pdf');
+ assert.equal(r.headers.get('cache-control'),'no-store');
+ assert.match(r.headers.get('content-disposition'),/attachment/);
+ const pdf=Buffer.from(await r.arrayBuffer());
+ assert.equal(pdf.subarray(0,5).toString(),'%PDF-');
+ assert.ok(!pdf.includes(Buffer.from(token)));assert.equal(f.submissions(),0);
+});

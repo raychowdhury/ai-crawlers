@@ -98,3 +98,9 @@ Malformed request targets return 400, and asynchronous route failures are caught
 HTML metadata is parsed in an isolated worker with a one-second deadline and a memory budget. Incomplete metadata produces an Unknown result. All app responses include a restrictive Content Security Policy, frame blocking, MIME sniffing protection, a no-referrer policy, and HSTS on HTTPS.
 
 Unconnected workspace sessions expire after two idle minutes. At most eight anonymous sessions per socket address and 128 globally are retained; the oldest idle anonymous session is evicted when necessary. Connected and busy sessions are never evicted to admit anonymous visitors. Existing request rate limits still apply.
+
+### PDF and text plans
+
+After an audit, select **View plan / Save PDF**, then **Download PDF**. WordPress, Shopify and developer handoff buttons open platform-specific reports. Reports include prioritized findings, next steps, verification guidance and any prepared repository change's status. The existing text download remains available.
+
+PDF export requires the current session and CSRF token. It excludes connection credentials, runs in an isolated worker with a five-second deadline and memory limits, and is limited to two concurrent exports, ten per client per minute and thirty per process per minute. PDF responses are not cached. Reports are not approvals or proof of deployment. Unsupported font characters are shown as Unicode code-point labels instead of silently disappearing.
