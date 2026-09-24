@@ -13,7 +13,7 @@ npm start
 
 Open http://localhost:3000. If that port is occupied, run `PORT=3107 npm start` and open http://localhost:3107.
 
-There is no compilation step. Run `npm install` once to install the HTML parser used for safe, targeted file edits; Node serves the app directly.
+There is no compilation step. Run `npm install` once to install the HTML parser used for bounded metadata parsing and safe, targeted file edits; Node serves the app directly.
 
 Enter a public website URL (a bare domain is accepted). The report includes per-crawler rules, HTTP results, priority findings, and a JSON download. While an audit runs, the submit button is disabled to prevent duplicate requests.
 
@@ -94,3 +94,7 @@ This release is intended for a single-instance early-access pilot. Persistent ac
 ## Bounded request and robots processing
 
 Malformed request targets return 400, and asynchronous route failures are caught at the HTTP boundary. Routing and access checks use the same normalized pathname. Robots wildcards use bounded dynamic programming instead of backtracking regular expressions. Parsing is capped at 500,000 characters, 5,000 lines, 1,000 rules and 1,024 characters per rule; each crawler decision has a 500,000-comparison budget and a 4,096-character path limit. Exceeded limits and unavailable robots policies produce an Unknown result and a review finding, not an allow decision.
+
+HTML metadata is parsed in an isolated worker with a one-second deadline and a memory budget. Incomplete metadata produces an Unknown result. All app responses include a restrictive Content Security Policy, frame blocking, MIME sniffing protection, a no-referrer policy, and HSTS on HTTPS.
+
+Unconnected workspace sessions expire after two idle minutes. At most eight anonymous sessions per socket address and 128 globally are retained; the oldest idle anonymous session is evicted when necessary. Connected and busy sessions are never evicted to admit anonymous visitors. Existing request rate limits still apply.

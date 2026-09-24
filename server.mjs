@@ -5,6 +5,8 @@ import { publicUrl, safeFetch } from './lib/safe-fetch.mjs';
 import { createAuditGate } from './lib/audit-gate.mjs';
 import { createWorkspace } from './lib/workspace.mjs';
 import { parseRobots, robotsDecision } from './lib/robots.mjs';
+import { extractMeta } from './lib/metadata.mjs';
+import { securityHeaders } from './lib/security-headers.mjs';
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC = new URL('./public/', import.meta.url).pathname;
@@ -43,19 +45,6 @@ async function readLimited(response) {
   return new TextDecoder().decode(Buffer.concat(chunks.map(v => Buffer.from(v))));
 }
 
-function extractMeta(html) {
-  const metaRobots=[];
-  for (const m of html.matchAll(/<meta\s+[^>]*>/gi)) {
-    const tag=m[0];
-    const name=(tag.match(/name\s*=\s*["']?([^"'\s>]+)/i)||[])[1]?.toLowerCase();
-    const content=(tag.match(/content\s*=\s*["']([^"']*)["']/i)||[])[1] || (tag.match(/content\s*=\s*([^\s>]+)/i)||[])[1];
-    if (name && content && (name === 'robots' || name.includes('bot'))) metaRobots.push({name,content});
-  }
-  const jsonLd = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].length;
-  const title=(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]?.replace(/\s+/g,' ').trim() || null;
-  return { metaRobots, jsonLd, title };
-}
-
 async function checkBot(rootUrl, path, bot, robotsParsed) {
   const robots = robotsDecision(robotsParsed, bot.token, path || '/');
   if (!bot.ua) return { ...bot, robotsAllowed: robots.allowed, robotsReason: robots.reason, httpStatus: null, httpAccessible: null, note: 'Policy token only; no dedicated request User-Agent.' };
@@ -87,7 +76,7 @@ async function audit(input) {
     pageHtml=await readLimited(out.response);
   } catch(e) { pageError=e.name==='AbortError' ? 'Request timed out' : e.message; }
 
-  const meta=extractMeta(pageHtml);
+  const meta=pageError?{metaRobots:[],jsonLd:null,title:null,complete:false,error:'Page could not be fetched'}:await extractMeta(pageHtml);
   const xRobots=(pageHeaders['x-robots-tag']||'').toLowerCase();
   const metaNoindex=meta.metaRobots.some(m => /(^|[,\s])noindex([,\s]|$)/i.test(m.content));
   const headerNoindex=/(^|[,\s])noindex([,\s]|$)/i.test(xRobots);
@@ -107,19 +96,21 @@ async function audit(input) {
   score -= coreBots.filter(b => b.httpAccessible === false).length * 5;
   if (!sitemapResults.some(s=>s.ok)) score-=6;
   if (!meta.jsonLd) score-=6;
+  if(!meta.complete)score=Math.min(score,79);
   score=Math.max(0, Math.min(100, score));
   if(coreBots.some(b=>b.robotsAllowed===null))score=Math.min(score,79);
 
   const findings=[];
+  if(!meta.complete)findings.push({severity:'medium',title:'Page metadata could not be fully checked',detail:meta.error+'; review the page manually.'});
   if(coreBots.some(b=>b.robotsAllowed===null))findings.push({severity:'medium',title:'Crawler policy could not be determined',detail:parsed.error||'The robots rules exceeded the safe matching budget. Review robots.txt manually.'});
   if (metaNoindex || headerNoindex) findings.push({severity:'critical',title:'Page is marked noindex',detail:'Search engines may be instructed not to index this page.'});
   for (const b of coreBots.filter(b=>b.robotsAllowed === false)) findings.push({severity:'high',title:`${b.name} is blocked by robots.txt`,detail:b.robotsReason});
   for (const b of coreBots.filter(b=>b.robotsAllowed && b.httpAccessible===false)) findings.push({severity:'high',title:`${b.name} could not fetch the page`,detail:b.error || `HTTP ${b.httpStatus}`});
   if (!sitemapResults.some(s=>s.ok)) findings.push({severity:'medium',title:'No working sitemap found',detail:'Add a sitemap.xml and reference it in robots.txt.'});
-  if (!meta.jsonLd) findings.push({severity:'medium',title:'No JSON-LD structured data detected',detail:'Add Organization or LocalBusiness schema where appropriate.'});
+  if (meta.complete && !meta.jsonLd) findings.push({severity:'medium',title:'No JSON-LD structured data detected',detail:'Add Organization or LocalBusiness schema where appropriate.'});
   if (!findings.length) findings.push({severity:'ok',title:'No major crawler/indexability blockers detected',detail:'Crawler access still does not guarantee indexing or inclusion in AI answers.'});
 
-  return { auditedAt:new Date().toISOString(), input:start.href, origin, page:{status:pageStatus,finalUrl:pageFinalUrl,redirects,error:pageError,title:meta.title,contentType:pageHeaders['content-type'],xRobotsTag:pageHeaders['x-robots-tag'],metaRobots:meta.metaRobots,jsonLdBlocks:meta.jsonLd,noindex:metaNoindex||headerNoindex}, robots:{status:robotsStatus,error:robotsError,found:Boolean(robotsText),sitemaps:parsed.sitemaps}, sitemaps:sitemapResults, bots:botResults, score, findings, disclaimer:'This is an external diagnostic. User-Agent simulation can detect many blocks, but it cannot prove how a provider will index, rank, train on, or cite a site.' };
+  return { auditedAt:new Date().toISOString(), input:start.href, origin, page:{status:pageStatus,finalUrl:pageFinalUrl,redirects,error:pageError,title:meta.title,contentType:pageHeaders['content-type'],xRobotsTag:pageHeaders['x-robots-tag'],metaRobots:meta.metaRobots,jsonLdBlocks:meta.jsonLd,noindex:metaNoindex||headerNoindex?true:meta.complete?false:null,metadataComplete:meta.complete,metadataError:meta.error}, robots:{status:robotsStatus,error:robotsError,found:Boolean(robotsText),sitemaps:parsed.sitemaps}, sitemaps:sitemapResults, bots:botResults, score, findings, disclaimer:'This is an external diagnostic. User-Agent simulation can detect many blocks, but it cannot prove how a provider will index, rank, train on, or cite a site.' };
 }
 
 async function serveStatic(req,res,requestUrl){
@@ -155,7 +146,6 @@ async function handleRequest(req,res){
   }
   if(pathname.startsWith('/workspace') && !workspaceEnabled)return json(res,404,{error:'Not found'});
   if(pathname.startsWith('/workspace')){
-    res.setHeader('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('referrer-policy','no-referrer');
     res.setHeader('cache-control','no-store');
     res.setHeader('x-content-type-options','nosniff');
@@ -183,6 +173,7 @@ async function handleRequest(req,res){
   await serveStatic(req,res,requestUrl);
 }
 const server=http.createServer((req,res)=>{
+  securityHeaders(res);
   handleRequest(req,res).catch(()=>{
     if(res.destroyed||res.writableEnded)return;
     if(res.headersSent){res.destroy();return;}

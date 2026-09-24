@@ -153,3 +153,28 @@ test('failed branch readback never opens a pull request',async()=>{
  await assert.rejects(submitGithubPlan(connection,plan,{client}),/did not match/);
  assert.ok(!f.calls.some(c=>c.path.endsWith('/pulls')));
 });
+
+test('anonymous session churn evicts old anonymous sessions but preserves connected owners',async t=>{
+ const f=await workspaceFixture(t);
+ assert.equal((await f.post('/connect',{provider:'github',token,repository:'owner/site'})).status,200);
+ let first;
+ for(let i=0;i<12;i++){
+  const response=await fetch(f.origin+'/api/workspace');
+  assert.equal(response.status,200);
+  if(!i)first={cookie:response.headers.get('set-cookie').split(';')[0],csrf:(await response.json()).csrf};
+ }
+ assert.equal((await f.post('/disconnect',{}, {sessionCookie:first.cookie,csrf:first.csrf})).status,401);
+ const owner=await fetch(f.origin+'/api/workspace',{headers:{cookie:f.cookie}});
+ assert.equal((await owner.json()).connection.repository,'owner/site');
+ assert.equal((await f.post('/disconnect',{})).status,200);
+});
+
+test('unconnected sessions expire after two idle minutes while connected owners remain',async t=>{
+ const f=await workspaceFixture(t);
+ const response=await fetch(f.origin+'/api/workspace');
+ const cookie=response.headers.get('set-cookie').split(';')[0],state=await response.json();
+ await f.post('/connect',{provider:'github',token,repository:'owner/site'});
+ f.setClock(Date.now()+121000);
+ assert.equal((await f.post('/disconnect',{}, {sessionCookie:cookie,csrf:state.csrf})).status,401);
+ assert.equal((await f.post('/disconnect',{})).status,200);
+});
