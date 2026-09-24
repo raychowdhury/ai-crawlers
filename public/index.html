@@ -1,11 +1,11 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Crawler Checker</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="theme-color" content="#080b10"><link rel="stylesheet" href="/styles.css"></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Crawler Checker</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="theme-color" content="#080b10"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/loading.css"></head><body>
 <div class="shell">
   <header><div class="brand"><span class="logo">A</span><div><strong>AI Crawler Checker</strong><small>AI visibility & indexability audit</small></div></div><span class="badge">Live audit</span></header>
   <main>
     <section class="hero"><p class="eyebrow">AI SEARCH READINESS</p><h1>Can AI crawlers actually <em>read your website?</em></h1><p>Check robots.txt rules, crawler access, noindex directives, sitemaps and structured data in one scan.</p>
       <form id="form"><div class="search"><span>⌕</span><label for="url" class="sr-only">Website URL</label><input id="url" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://example.com" required><button>Run audit <span>→</span></button></div><div class="examples">Tests OpenAI, Google, Microsoft, Anthropic and Perplexity crawler signals.</div></form>
     </section>
-    <section id="loading" class="loading hidden" role="status" aria-live="polite"><div class="spinner"></div><div><strong>Auditing website…</strong><span>Checking crawler policies and live HTTP access</span></div></section>
+    <section id="loading" class="scan-progress hidden" role="status" aria-live="polite"><div class="scan-orbit" aria-hidden="true"><span>✦</span></div><div class="scan-copy"><p class="scan-kicker">LIVE WEBSITE CHECK</p><strong>Checking your website</strong><p>Reviewing crawler access, indexing signals and discovery settings.</p><div class="scan-track" aria-hidden="true"><span></span></div><small>This usually takes a few seconds. Some websites respond more slowly.</small></div></section>
     <section id="results" class="hidden" aria-live="polite" tabindex="-1"></section>
   </main>
   <footer>
